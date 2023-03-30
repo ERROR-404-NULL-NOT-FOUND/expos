@@ -10,11 +10,17 @@ from colorama import Fore, Style
 
 # Constants
 # It's static so if an installation-breaking change occurs, it doesn't affect anything
-downloadURL = 'https://mirror.bytemark.co.uk/gentoo/releases/amd64/autobuilds/20230326T170209Z/stage3-amd64-openrc-20230326T170209Z.tar.xz'
-sha256URL = 'https://mirror.bytemark.co.uk/gentoo/releases/amd64/autobuilds/20230326T170209Z/stage3-amd64-openrc-20230326T170209Z.tar.xz.sha256'
-ExpOSversion = '1.0'
-gentooVersion = '17.1'
-tarballReleaseVersion = '2023-03-26'
+
+
+class constants:
+    # It's static so if an installation-breaking change occurs, it doesn't affect anything
+    downloadURL = 'https://mirror.bytemark.co.uk/gentoo/releases/amd64/autobuilds/20230326T170209Z/stage3-amd64-openrc-20230326T170209Z.tar.xz'
+    sha256URL = 'https://mirror.bytemark.co.uk/gentoo/releases/amd64/autobuilds/20230326T170209Z/stage3-amd64-openrc-20230326T170209Z.tar.xz.sha256'
+    ExpOSversion = '1.0'
+    gentooVersion = '17.1'
+    tarballReleaseVersion = '2023-03-26'
+    mountpoint = '/mng/gentoo'
+
 
 # Global variables
 args = sys.argv
@@ -106,62 +112,77 @@ def main():
             ['mkfs.ext4', args.root[0]],
             'Creation of root filesystem failed, see error')
 
-    if not os.path.lexists('/mnt/gentoo'):
+    if not os.path.lexists(constants.mountpoint):
         info('Creating mount directory')
         try:
-            os.mkdir('/mnt/gentoo')
+            os.mkdir(constants.mountpoint)
         except Exception as e:
-            error('Failed creating mountpoint: /mnt/gentoo')
+            error(f'Failed creating mountpoint: {constants.mountpoint}')
 
     info('Mounting boot partition')
     try:
         mountOutput = subprocess.check_output(
-            ['mount', '-t', 'ext4', args.root[0], '/mnt/gentoo'])
+            ['mount', '-t', 'ext4', args.root[0], constants.mountpoint])
         if re.match(r'superuser', mountOutput):
             raise CalledProcessError()
     except subprocess.CalledProcessError:
         error('Failed mounting root partition')
 
-    os.chdir('/mnt/gentoo')
+    os.chdir(constants.mountpoint)
 
     currentStage('Installing stage tarball')
-    if not os.path.lexists(f'/mnt/gentoo/stage3-amd64-openrc-{tarballReleaseVersion}.tar.xz'):
+    if not os.path.lexists(f'{constants.mountpoint}/stage3-amd64-openrc-{constants.tarballReleaseVersion}.tar.xz'):
         # command('Downloading stage tarball',
         #       ['curl', downloadURL, '-o',
         #           f'stage3-amd64-openrc-{tarballReleaseVersion}.tar.xz.tmp', '-#', ('--verbose' if args.verbose else '')],
         #      'Failed downloading stage tarball')
         command('Renaming stage tarball',
-                ['mv', f'stage3-amd64-openrc-{tarballReleaseVersion}.tar.xz.tmp',
-                    f'stage3-amd64-openrc-{tarballReleaseVersion}.tar.xz', ('--verbose' if args.verbose else '')],
+                ['mv', f'stage3-amd64-openrc-{constants.tarballReleaseVersion}.tar.xz.tmp',
+                    f'stage3-amd64-openrc-{constants.tarballReleaseVersion}.tar.xz', ('--verbose' if args.verbose else '')],
                 'Failed downloading stage tarball')
     else:
         info('Skipping tarball download; file already exists')
 
-    if not os.path.lexists(f'/mnt/gentoo/checksum-{tarballReleaseVersion}.sha256'):
+    if not os.path.lexists(f'{constants.mountpoint}/checksum-{constants.tarballReleaseVersion}.sha256'):
         command('Downloading Sha256 checksum',
                 ['curl', sha256URL, '-o',
-                    f'checksum-{tarballReleaseVersion}.sha256.tmp', '-#', ('--verbose' if args.verbose else '')],
+                    f'checksum-{constants.tarballReleaseVersion}.sha256.tmp', '-#', ('--verbose' if args.verbose else '')],
                 'Failed downloading Sha256 checksum')
         command('Renaming checksum',
-                ['mv', f'checksum-{tarballReleaseVersion}.sha256.tmp',
-                    f'checksum-{tarballReleaseVersion}.sha256', ('--verbose' if args.verbose else '')],
+                ['mv', f'checksum-{constants.tarballReleaseVersion}.sha256.tmp',
+                    f'checksum-{constants.tarballReleaseVersion}.sha256', ('--verbose' if args.verbose else '')],
                 'Failed renaming sha256 checksum')
         command('Editing checksum to match stage tarball',
                 ['sed', '-i',
-                    f's/stage3-openrc-.*\.tar\.xz/stage3-amd64-openrc-{tarballReleaseVersion}\.tar\.xz/g', f'checksum-{tarballReleaseVersion}.sha256'],
+                    f's/stage3-openrc-.*\.tar\.xz/stage3-amd64-openrc-{constants.tarballReleaseVersion}\.tar\.xz/g', f'checksum-{constants.tarballReleaseVersion}.sha256'],
                 'Failed sed operation')
     else:
         info('Skipping checksum download; file already exists')
 
     command('Verifying the integraty of Stage3 tarball',
-            ['sha256sum', '-c', f'checksum-{tarballReleaseVersion}.sha256'],
+            ['sha256sum', '-c',
+                f'checksum-{constants.tarballReleaseVersion}.sha256'],
             'Failed to verify the integrety of stage3 tarball')
 
     command('Unpacking stage tarball',
-            ['tar', 'xpf', f'stage3-amd64-openrc-{tarballReleaseVersion}.tar.xz',
+            ['tar', 'xpf', f'stage3-amd64-openrc-{constants.tarballReleaseVersion}.tar.xz',
                 '--xattrs-include="*"', '--numeric-owner', ('--verbose' if args.verbose else '')],
             'Failed to unpack the stage tarball')
 
+    # TODO: Download make.conf, as well as set up Crimson to host shit
+
+    command('Setting -j',
+            f'echo MAKEOPTS="-j{args.jobs}" >> {constants.mountpount}/make.conf',
+            'Failed writing to make.conf')
+
+    command('Selecting mirrors',
+            f'mirrorselect -D -a -o >> {constants.mountpoint}/etc/portage/make.conf',
+            'Failed mirror selection')
+
+    command('Copying DNS info',
+            ['cp', '--dereference', '/etc/resolv.conf',
+                f'{constants.mountpoint}/etc/resolv.conf'],
+            'Failed to copy DNS info')
     # command('')
 
 
