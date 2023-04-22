@@ -4,73 +4,84 @@
 import subprocess
 import re
 import os
+import getpass
 import sys
 import argparse
 from colorama import Fore, Style
-
-# Constants
-# It's static so if an installation-breaking change occurs, it doesn't affect anything
+import pychroot
 
 
-class constants:
+class consts:
     # It's static so if an installation-breaking change occurs, it doesn't affect anything
-    downloadURL = 'https://mirror.bytemark.co.uk/gentoo/releases/amd64/autobuilds/20230326T170209Z/stage3-amd64-openrc-20230326T170209Z.tar.xz'
-    sha256URL = 'https://mirror.bytemark.co.uk/gentoo/releases/amd64/autobuilds/20230326T170209Z/stage3-amd64-openrc-20230326T170209Z.tar.xz.sha256'
-    ExpOSversion = '1.0'
-    gentooVersion = '17.1'
-    tarballReleaseVersion = '2023-03-26'
-    mountpoint = '/mng/gentoo'
+    EXPVER = '1.0'
+    GENTOOVER = '17.1'
+    TARBALLVER = '20230326T170209Z'
+    MNTPOINT = '/mnt/gentoo'
+    KERNELVER = '6.1.12'
+
+    DOWNLOADURL = 'https://mirror.bytemark.co.uk/gentoo/releases/amd64/autobuilds/20230326T170209Z/stage3-amd64-openrc-20230326T170209Z.tar.xz'
+    SHA256URL = 'https://mirror.bytemark.co.uk/gentoo/releases/amd64/autobuilds/20230326T170209Z/stage3-amd64-openrc-20230326T170209Z.tar.xz.sha256'
+    MAKEURL = f'https://expos.us.to/distfiles/{EXPVER}/makefiles'
 
 
-# Global variables
-args = sys.argv
-parser = argparse.ArgumentParser(description='Installer for ExpOS: Gentoo, simplified',
-                                 epilog='Copyright Tetra Green 2023, Licenced under GPLv3')
-
-parser.add_argument('--boot-drive', '-bd', required=1, type=str, nargs=1, dest='boot',
-                    help='[/dev/sd*] Block device used for GRUB2 installation and storing kernels, overwrites target with EXT4; recommended to be 256mb or larger')
-parser.add_argument('--root-drive', '-rd', required=1, type=str, nargs=1, dest='root',
-                    help='[/dev/sd*] Block device used as root partition, overwrites target with EXT4; minimim size required varies on profile, 10gb or larger for desktop')
-parser.add_argument('--home-fs', '-f', required=0, type=str, nargs=1, dest='home',
-                    help='[/dev/sd*] Block device containing previously created filesystem to act as a home filesystem; does not overwrite')
-parser.add_argument('--make', '-m', required=0, type=str, nargs=1, dest='makeLoc',
-                    help='[/path/make.conf] Path to custom make.conf; default can be viewed at https://expos.us.to/distfiles/configs/portage/make.conf')
-parser.add_argument('--profile', '-p', required=0, type=str, nargs=1, default='default/linux/amd64/17.1/desktop',
-                    dest='profile', help='[name/of/profile] What profile to use; systemd is not supported')
-parser.add_argument('--use', '-u', required=0, type=str, nargs=1, dest='use',
-                    help='[flag1,flag2,flag3] What use flags are included in the make.conf; defaults include LTO, PGO, and Graphite')
-parser.add_argument('--ntp', '-n', required=0, type=str, nargs=1, default='y',
-                    dest='ntp', help='[Y/n] Whether or not NTP should be installed and run')
-parser.add_argument('--timezone', '-t', required=0, type=str, nargs=1, default='Europe/London',
-                    dest='timezone', help='[Continent/City] What timezone to use for the installed system')
-parser.add_argument('--locale', '-l', required=0, type=str, nargs=1, default='en_US.UTF-8 UTF-8',
-                    dest='locale', help='["en_US.UTF-8 UTF-8] What locale to use for the installed system')
-parser.add_argument('--hostname', '-s', required=0, type=str, nargs=1, default='expos',
-                    dest='hostname', help='[localhost] Hostname of the installed system')
-parser.add_argument('--network-tools', '-nt', required=0, type=str, nargs=1, default='dhcpcd',
-                    dest='networking', help='[dhcpcd] Networking toles to be installed on the system')
-parser.add_argument('--jobs', '-j', required=1, type=int, nargs=1, dest='jobs',
-                    help='[4] How many compile jobs to run in parallel; 2G of ram per job is recommended')
-parser.add_argument('--no-optimization', '-no', dest='noOp',
-                    help='[Y,n] Disables LTo, PGO, and Graphite; greatly decreases compile time at the cost of performance')
-parser.add_argument('--pretend', '-pr', required=0, type=bool, dest='pretend',
-                    help='Will not actually install a system, but will perform all of the checks (other than root) and will output')
-parser.add_argument('--keep-going', '-k', required=0, type=bool,
-                    dest='keepGoing', help='Ignores any and all errors and just keeps going')
-parser.add_argument('--verbose', '-v', type=bool, dest='verbose',
-                    help='Enables verbose debugging on all commands run')
-
-args = parser.parse_args()
+class globals:
+    STAGE: str
+    ARGS: argparse.ArgumentParser
 
 
-def error(errorCode: str):
-    print(f'!! {Style.BRIGHT}{Fore.RED}{errorCode}{Style.RESET_ALL} !!')
-    if (not args.keepGoing):
+def parse():
+    parser = argparse.ArgumentParser(description='Installer for ExpOS: Gentoo, simplified',
+                                     epilog='Copyright Tetra Green 2023, Licenced under GPLv3')
+
+    parser.add_argument('--boot-drive', '-bd', required=1, type=str, nargs=1, dest='boot',
+                        help='[/dev/sd*] Block device used for GRUB2 installation and storing kernels, overwrites target with EXT4; recommended to be 256mb or larger')
+    parser.add_argument('--root-drive', '-rd', required=1, type=str, nargs=1, dest='root',
+                        help='[/dev/sd*] Block device used as root partition, overwrites target with EXT4; minimim size required varies on profile, 10gb or larger for desktop')
+    parser.add_argument('--home-fs', '-f', required=0, type=str, nargs=1, dest='home',
+                        help='[/dev/sd*] Block device containing previously created filesystem to act as a home filesystem; does not overwrite')
+    parser.add_argument('--make', '-m', required=0, type=str, nargs=1, dest='makeLoc',
+                        help='[/path/make.conf] Path to custom make.conf; default can be viewed at https://expos.us.to/distfiles/configs/portage/make.conf')
+    parser.add_argument('--profile', '-p', required=0, type=str, nargs=1, default=f'default/linux/amd64/{consts.GENTOOVER}/desktop',
+                        dest='profile', help='[name/of/profile] What profile to use; systemd is not supported')
+    parser.add_argument('--use', '-u', required=0, type=str, nargs=1, dest='use', default="lto pgo graphite",
+                        help='[flag1,flag2,flag3] What use flags are included in the make.conf; defaults include LTO, PGO, and Graphite')
+    parser.add_argument('--ntp', '-n', required=0, type=bool, nargs=1, default=False,
+                        dest='ntp', help='Whether or not NTP should be installed and run')
+    parser.add_argument('--timezone', '-t', required=0, type=str, nargs=1, default='Europe/London',
+                        dest='timezone', help='[Continent/City] What timezone to use for the installed system')
+    parser.add_argument('--locale', '-l', required=0, type=str, nargs=1, default='en_US.UTF-8 UTF-8',
+                        dest='locale', help='["en_US.UTF-8 UTF-8] What locale to use for the installed system')
+    parser.add_argument('--hostname', '-s', required=0, type=str, nargs=1, default='expos',
+                        dest='hostname', help='[localhost] Hostname of the installed system')
+    parser.add_argument('--wireless', '-w', required=0, type=bool, nargs=1, default='net-misc/dhcpcd',
+                        dest='networking', help='[dhcpcd] Networking toles to be installed on the system')
+    parser.add_argument('--jobs', '-j', required=1, type=int, nargs=1, dest='jobs',
+                        help='[4] How many compile jobs to run in parallel; 2G of ram per job is recommended')
+    parser.add_argument('--no-optimization', '-no', dest='noOp',
+                        help='[Y,n] Disables LTo, PGO, and Graphite; greatly decreases compile time at the cost of performance')
+    parser.add_argument('--pretend', '-pr', required=0, type=bool, dest='pretend',
+                        help='Will not actually install a system, but will perform all of the checks (other than root) and will output')
+    parser.add_argument('--keep-going', '-k', required=0, type=bool,
+                        dest='keepGoing', help='Ignores any and all errors and just keeps going')
+    parser.add_argument('--verbose', '-v', type=bool, dest='verbose',
+                        help='Enables verbose debugging on all commands run')
+    parser.add_argument('--video-card', '-vc', type=bool, dest='video',
+                        help='What video card to use')
+
+    globals.ARGS = parser.parse_args()
+
+
+def error(errorCode):
+    print(
+        f'!! {Style.BRIGHT}{Fore.RED}{errorCode}{Style.RESET_ALL} !!')
+    info(f'Stage: {globals.STAGE}')
+    if (not globals.ARGS.keepGoing):
         exit(1)
 
 
 def currentStage(stage: str):
     print(f'[{Fore.GREEN}*{Style.RESET_ALL}] {Style.BRIGHT}{Fore.GREEN}{stage}{Style.RESET_ALL}')
+    globals.STAGE = stage
 
 
 def info(info: str):
@@ -78,115 +89,294 @@ def info(info: str):
 
 
 def warning(warn: str):
-    print(f'^^ {Style.BRIGHT}{Fore.ORANGE}{warn}{Style.RESET_ALL} ^^')
+    print(f'^^ {Style.BRIGHT}{Fore.YELLOW}{warn}{Style.RESET_ALL} ^^')
 
 
 def command(infoMessage: str, command: list, errorMessage: str):
     info(infoMessage)
+    print(' '.join(command))
     try:
         subprocess.run(command)
     except subprocess.CalledProcessError as e:
         error(errorMessage)
 
 
+def installPackage(package: str):
+    command(f'Installing {package}', ['/usr/bin/emerge', package, (
+        '--verbose' if globals.ARGS.verbose else '--quiet')], f'Failed to install package: {package}')
+
+
+def enableService(service: str):
+    command(f'Enabling {service}', [
+            '/usr/bin/rc-update', 'add', service, 'default', 'Failed to enable f{service}'])
+
+
+def writeToFile(info, data, file):
+    command(info, ['/usr/bin/echo', data, '>>', file],
+            f'Failed to write to: {file}')
+
+
+def download(status, url, filename):
+    command(status, ['curl', url, '-o', f'{filename}.tmp', '-#',
+            ('--verbose' if globals.ARGS.verbose else '')], f'Failed to download: {url}')
+    command(f'Renaming {filename}', [
+            'mv', f'{filename}.tmp', filename], f'Failed renaming {filename}')
+
+#
+# Stages
+#
+
+
+class Stages:
+    def filesystemInit():
+        currentStage('Creating filesystems')
+
+        # command('Creating filesystem on boot device',
+        #        ['mkfs.fat', '-F', '32', globals.ARGS.boot[0]],
+        #        'Creation of boot filesystem failed, see error')
+
+        # command('Creating filesystem on root device',
+        #        ['mkfs.ext4', globals.ARGS.root[0]],
+        #        'Creation of root filesystem failed, see error')
+
+        if not os.path.lexists(consts.MNTPOINT):
+            info('Creating mount directory')
+            try:
+                os.mkdir(consts.MNTPOINT)
+            except Exception as e:
+                error(f'Failed creating mount point: {consts.MNTPOINT}')
+
+        info('Mounting root partition')
+        # try:
+        #    mountOutput = subprocess.check_output(
+        #        ['mount', '-t', 'ext4', globals.ARGS.root[0], consts.MNTPOINT])
+        #    if re.match(r'superuser', mountOutput):
+        #        raise CalledProcessError()
+        # except subprocess.CalledProcessError:
+        #    error('Failed mounting root partition')
+
+    def installStageTar():
+        currentStage('Installing stage tarball')
+        if not os.path.lexists(f'{consts.MNTPOINT}/stage3-amd64-openrc-{consts.TARBALLVER}.tar.xz'):
+            download('Downloading stage tarball', consts.downloadURL,
+                     f'stage3-amd64-openrc-{consts.TARBALLVER}.tar.xz.tmp')
+        else:
+            info('Skipping tarball download; file already exists')
+
+        if not os.path.lexists(f'{consts.MNTPOINT}/checksum-{consts.TARBALLVER}.sha256'):
+            download('Downloading Sha256 checksum', consts.SHA256URL,
+                     f'checksum-{consts.TARBALLVER}.sha256')
+        else:
+            info('Skipping checksum download; file already exists')
+
+        command('Verifying the integrity of Stage3 tarball',
+                ['sha256sum', '-c',
+                    f'checksum-{consts.TARBALLVER}.sha256'],
+                'Failed to verify the integrety of stage3 tarball')
+
+        # command('Unpacking stage tarball',
+        #        ['tar', 'xpf', f'stage3-amd64-openrc-{consts.TARBALLVER}.tar.xz',
+        #            '--xattrs-include="*"', '--numeric-owner', ('--verbose' if globals.ARGS.verbose else '')],
+        #        'Failed to unpack the stage tarball')
+
+    def configure():
+        os.chdir(consts.MNTPOINT)
+        currentStage("Configuring the new system")
+
+        # download('Downloading makefile',
+        # f'{consts.MAKEURL}/{"make-generic.conf" if globals.ARGS.noOp else "make-optimized.conf"}', 'make.conf')
+
+        writeToFile('Setting -j', f'\'MAKEOPTS=-"j{globals.ARGS.jobs[0]}"\'',
+                    f'{consts.MNTPOINT}/etc/portage/make.conf')
+
+        writeToFile('Setting use flags',
+                    f'USE="{globals.ARGS.use}"', '/etc/portage/make.conf')
+        try:
+            command('Selecting mirrors', ['mirrorselect', '-D', '-a', '-o', '>>', f'{consts.MNTPOINT}/etc/portage/make.conf'],
+                    'Failed mirror selection')
+        except FileNotFoundError:
+            warning('Skipping mirrorselect, as it is not installed on the host (???)')
+
+        command('Copying DNS info',
+                ['cp', '--dereference', '/etc/resolv.conf',
+                    f'{consts.MNTPOINT}/etc/resolv.conf'],
+                'Failed to copy DNS info')
+
+    def mount():
+        currentStage('Mounting necessary filesystems')
+
+        try:
+            subprocess.run(['mount', '--types', 'proc', '/proc',
+                            f'{consts.MNTPOINT}/proc'])
+
+            subprocess.run(['mount', '--rbind', '/sys',
+                            f'{consts.MNTPOINT}/sys'])
+            subprocess.run(['mount', '--make-rslave',
+                           f'{consts.MNTPOINT}/sys'])
+
+            subprocess.run(['mount', '--rbind', '/dev',
+                            f'{consts.MNTPOINT}/dev'])
+            subprocess.run(['mount', '--make-rslave',
+                           f'{consts.MNTPOINT}/dev'])
+
+            subprocess.run(['mount', '--bind', '/run',
+                           f'{consts.MNTPOINT}/run'])
+            subprocess.run(['mount', '--make-slave', f'{consts.MNTPOINT}/run'])
+
+        except subprocess.CalledProcessError:
+            error('Failed to mount pseudo filesystems')
+
+        info('Entering chroot')
+        os.chroot(consts.MNTPOINT)
+        os.putenv('PATH', '/usr/local/bin:/usr/bin:/usr/local/sbin')
+        os.putenv('PORTAGE_BZIP2_COMMAND', '/usr/bin/bzip2')
+        os.system('/bin/echo $PATH')
+
+        command('Mounting boot partition', [
+                '/bin/mount', '-t', 'ext4', globals.ARGS.boot[0], '/boot'], 'Failed to mount boot partition')
+
+    def configPortage():
+        currentStage('Configuring Portage')
+
+        command('Syncing Portage, stage 1', ['/usr/bin/emerge-webrsync'],
+                'Failed to run emerge-webrsync')
+
+        command('Syncing Portage, stage 2', [
+                '/usr/bin/emerge', '--sync', ('--quiet' if not globals.ARGS.verbose else '--verbose')], 'Failed to run emerge --sync')
+
+        command('Selecting Portage profile', [
+                '/usr/bin/eselect', 'profile', 'set', globals.ARGS.profile], 'Failed to set Portage profile, check your profile setting')
+
+        command('Setting video card', [
+                '/bin/echo', globals.ARGS.video, '>>', '/etc/portage/make.conf'])
+
+        if not globals.ARGS.noOp:
+            installPackage('app-eselect/eselect-repository')
+            installPackage('dev-vcs/git')
+            command('Enabling lto overlay', [
+                    '/usr/bin/eselect', 'repository', 'enable', 'lto-overlay'])
+            command('Enabling lto overlay', [
+                    '/usr/bin/eselect', 'repository', 'enable', 'mv'])
+            command('Syncing lto-overlay and mv overlays',
+                    ['/usr/bin/emaint', 'sync', '-r', 'lto-overlay', '-r', 'mv'])
+
+    def update():
+        currentStage('Updating portage')
+
+        command('Downloading generic binary GCC, as building with the initial Graphite use flags leads to unpredictable behaviour', [
+                '/usr/bin/emerge', '-k', 'sys-devel/gcc'], 'Failed to download GCC binary')
+        if not globals.ARGS.noOp:
+            warning(
+                'As you have enabled optimization, this step, depending on your hardware, could take 8 hours or more')
+            command('Running emerge -e @world (full system rebuild)', ['/usr/bin/emerge', '--everything', '@world', (
+                '--verbose' if globals.ARGS.verbose else '--quiet')], 'Failed to update, you\'re on your own good luck')
+        else:
+            command('Running emerge -uDN @world (full system update)', ['/usr/bin/emerge', '--update', '--deep', '--newuse', '@world', (
+                '--verbose' if globals.ARGS.verbose else '--quiet')], 'Failed to update, you\'re on your own good luck')
+
+        writeToFile('Setting timezone', globals.ARGS.timezone, '/etc/timezone')
+        subprocess.run(['/usr/bin/emerge', '--config', 'sys-lib/timezone-data',
+                        ('--verbose' if globals.ARGS.verbose else '--quiet')])
+
+        writeToFile('Setting locale', globals.ARGS.locale, '/etc/locale.gen')
+        subprocess.run('locale-gen')
+        subprocess.run(['/usr/bin/eselect', 'locale',
+                       'set', globals.ARGS.locale])
+
+    def installKernel():
+        currentStage('Installing Linux kernel')
+
+        installPackage('sys-kernel/linux-firmware')
+        installPackage('sys-kernel/installkernel-gentoo')
+        installPackage(f'=sys-kernel/gentoo-kernel-{consts.KERNELVER}')
+        installPackage('sys-kernel/dracut')
+
+        command('Building initramfs', [
+                '/usr/bin/dracut', '-k', f'{consts.KERNELVER}-gentoo'])
+
+        if globals.ARGS.verbose:
+            info('Contents of /boot')
+            subprocess.run(['/bin/ls', '-lash', '/boot'])
+
+    def configSystem():
+        currentStage('Configuring system')
+
+        fstab = f'''Auto-generated by the ExpOS installer
+{globals.ARGS.boot[0]}     /boot       vfat        defaults,noatime    0 2
+{globals.ARGS.root[0]}     /           ext4        noatime             0 1
+{(f'{globals.ARGS.home[0]}     /home       ext4        noatime     0 1' if globals.ARGS.home else '')}
+    '''
+
+        writeToFile('Writing fstab', fstab, '/etc/fstab')
+
+        writeToFile('Setting hostname',
+                    globals.ARGS.hostname[0], '/etc/hostname')
+
+    def insatllUtils():
+        currentStage('Installing system utilites')
+        installPackage('net-misc/dhcpcd')
+        enableService('dhcpcd')
+        if globals.ARGS.wireless:
+            installPackage('net-misc/networkmanager')
+            enableService('NetworkManager')
+
+        installPackage('app-admin/sysklogd')
+        enableService('sysklogd')
+
+        installPackage('sys-process/chronie')
+        enableService('chronie')
+
+        if globals.ARGS.ntp:
+            installPackage('net-misc/chrony')
+            enableService('chronyd')
+
+        writeToFile('Enabling doas\' persist functionality',
+                    'app-admin/doas persist', '/etc/portage/package.use/doas')
+        installPackage('app-admin/doas')
+        writeToFile('Writing sane doas configuration',
+                    'permit persist :wheel as root', '/etc/doas.conf')
+
+    def installBootloader():
+        currentStage('Installing bootloader')
+        writeToFile('Writing GRUB_PLATFORMS',
+                    'GRUB_PLATFORMS="efi-64"', '/etc/portage/make.conf')
+        installPackage('sys-boot/grub')
+
+
 def main():
+    parse()
     # Root sanity checking
-    if (not args.pretend):
-        if re.match(r'root', str(subprocess.check_output('whoami'))) == None:
+    if (not globals.ARGS.pretend):
+        if getpass.getuser() != 'root':
             error('Not running as root')
 
     # Path sanity checking
-    if not os.path.lexists(args.boot[0]):
-        error(f'The following device does not exist: {args.boot[0]}')
+    # if not os.path.lexists(args.boot[0]):
+    #    error(f'The following device does not exist: {args.boot[0]}')
 
     # TODO:
     # More sanity checking
-
-    currentStage('Creating filesystems')
-
-    command('Creating filesystem on boot device',
-            ['mkfs.fat', '-F', '32', args.boot[0]],
-            'Creation of boot filesystem failed, see error')
-
-    command('Creating filesystem on root device',
-            ['mkfs.ext4', args.root[0]],
-            'Creation of root filesystem failed, see error')
-
-    if not os.path.lexists(constants.mountpoint):
-        info('Creating mount directory')
-        try:
-            os.mkdir(constants.mountpoint)
-        except Exception as e:
-            error(f'Failed creating mountpoint: {constants.mountpoint}')
-
-    info('Mounting boot partition')
-    try:
-        mountOutput = subprocess.check_output(
-            ['mount', '-t', 'ext4', args.root[0], constants.mountpoint])
-        if re.match(r'superuser', mountOutput):
-            raise CalledProcessError()
-    except subprocess.CalledProcessError:
-        error('Failed mounting root partition')
-
-    os.chdir(constants.mountpoint)
-
-    currentStage('Installing stage tarball')
-    if not os.path.lexists(f'{constants.mountpoint}/stage3-amd64-openrc-{constants.tarballReleaseVersion}.tar.xz'):
-        # command('Downloading stage tarball',
-        #       ['curl', downloadURL, '-o',
-        #           f'stage3-amd64-openrc-{tarballReleaseVersion}.tar.xz.tmp', '-#', ('--verbose' if args.verbose else '')],
-        #      'Failed downloading stage tarball')
-        command('Renaming stage tarball',
-                ['mv', f'stage3-amd64-openrc-{constants.tarballReleaseVersion}.tar.xz.tmp',
-                    f'stage3-amd64-openrc-{constants.tarballReleaseVersion}.tar.xz', ('--verbose' if args.verbose else '')],
-                'Failed downloading stage tarball')
-    else:
-        info('Skipping tarball download; file already exists')
-
-    if not os.path.lexists(f'{constants.mountpoint}/checksum-{constants.tarballReleaseVersion}.sha256'):
-        command('Downloading Sha256 checksum',
-                ['curl', sha256URL, '-o',
-                    f'checksum-{constants.tarballReleaseVersion}.sha256.tmp', '-#', ('--verbose' if args.verbose else '')],
-                'Failed downloading Sha256 checksum')
-        command('Renaming checksum',
-                ['mv', f'checksum-{constants.tarballReleaseVersion}.sha256.tmp',
-                    f'checksum-{constants.tarballReleaseVersion}.sha256', ('--verbose' if args.verbose else '')],
-                'Failed renaming sha256 checksum')
-        command('Editing checksum to match stage tarball',
-                ['sed', '-i',
-                    f's/stage3-openrc-.*\.tar\.xz/stage3-amd64-openrc-{constants.tarballReleaseVersion}\.tar\.xz/g', f'checksum-{constants.tarballReleaseVersion}.sha256'],
-                'Failed sed operation')
-    else:
-        info('Skipping checksum download; file already exists')
-
-    command('Verifying the integraty of Stage3 tarball',
-            ['sha256sum', '-c',
-                f'checksum-{constants.tarballReleaseVersion}.sha256'],
-            'Failed to verify the integrety of stage3 tarball')
-
-    command('Unpacking stage tarball',
-            ['tar', 'xpf', f'stage3-amd64-openrc-{constants.tarballReleaseVersion}.tar.xz',
-                '--xattrs-include="*"', '--numeric-owner', ('--verbose' if args.verbose else '')],
-            'Failed to unpack the stage tarball')
-
-    # TODO: Download make.conf, as well as set up Crimson to host shit
-
-    command('Setting -j',
-            f'echo MAKEOPTS="-j{args.jobs}" >> {constants.mountpount}/make.conf',
-            'Failed writing to make.conf')
-
-    command('Selecting mirrors',
-            f'mirrorselect -D -a -o >> {constants.mountpoint}/etc/portage/make.conf',
-            'Failed mirror selection')
-
-    command('Copying DNS info',
-            ['cp', '--dereference', '/etc/resolv.conf',
-                f'{constants.mountpoint}/etc/resolv.conf'],
-            'Failed to copy DNS info')
-    # command('')
+    Stages.filesystemInit()
+    Stages.installStageTar()
+    Stages.configure()
+    Stages.mount()
+    Stages.configPortage()
+    Stages.update()
+    Stages.installKernel()
+    Stages.configSystem()
+    Stages.insatllUtils()
+    Stages.installBootloader()
 
 
 try:
     main()
 except KeyboardInterrupt:
     error('Installation cancelled via Ctrl+C')
+except Exception as e:
+    error(e)
+    warning('Unmounting filesystems due to errors')
+    os.chdir('/')
+    command('umount -l ' + consts.MNTPOINT +
+            '/dev{/shm,/pts,}', ['umount', '-l', consts.MNTPOINT + '/dev/shm', consts.MNTPOINT + '/dev/pts'], 'Failed the above command')
+    command('umount -R ' + consts.MNTPOINT,
+            ['umount', '-R', consts.MNTPOINT], 'Failed  the above command')
